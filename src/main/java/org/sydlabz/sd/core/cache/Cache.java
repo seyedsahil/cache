@@ -313,11 +313,25 @@ public final class Cache {
         }
     }
 
-    public synchronized void shutdown() {
+    public synchronized void shutdown(boolean force) {
+        Write writeStrategy = this.cachePolicy.getWriteStrategy();
+
+        if (force || writeStrategy == Write.THROUGH) {
+            shutdown();
+        } else if (writeStrategy == Write.BEHIND) {
+            this.writeBehind();
+
+            shutdown();
+        }
+    }
+
+    private synchronized void shutdown() {
         this.active = false;
         this.invalidationTimer.cancel();
+        this.writeBehindTimer.cancel();
         this.cachedDataStore.clear();
         this.evictionQueue.clear();
+        this.writeBehindQueue.clear();
     }
 
     @Override
