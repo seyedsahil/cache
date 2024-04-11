@@ -18,4 +18,8 @@ public final class Util {
 
         return localDateTime.format(formatter);
     }
+
+    public static boolean usable(Object object) {
+        return object != null;
+    }
 }

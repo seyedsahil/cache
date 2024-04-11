@@ -6,34 +6,34 @@ import static javax.management.timer.Timer.ONE_MINUTE;
  * @author seyedsahil
  * @version 1.0
  */
-public final class Policy {
-    private static Policy defaultPolicy;
+public final class CachePolicy {
+    private static CachePolicy defaultCachePolicy;
     private final long cacheSize;
     private long delay;
     private long invalidationFrequency;
-    private Invalidation invalidationStrategy;
+    private InvalidationStrategy invalidationStrategy;
     private long invalidationLifeTime;
-    private Eviction evictionStrategy;
-    private Write writeStrategy;
+    private EvictionStrategy evictionStrategy;
+    private WriteStrategy writeStrategy;
     private long writeBehindFrequency;
 
-    private Policy() {
+    private CachePolicy() {
         this.cacheSize = 16;
         this.invalidationFrequency = 5 * ONE_MINUTE;
         this.delay = ONE_MINUTE;
-        this.invalidationStrategy = Invalidation.TTL;
+        this.invalidationStrategy = InvalidationStrategy.TTL;
         this.invalidationLifeTime = 3 * ONE_MINUTE;
-        this.evictionStrategy = Eviction.FIFO;
-        this.writeStrategy = Write.THROUGH;
+        this.evictionStrategy = EvictionStrategy.FIFO;
+        this.writeStrategy = WriteStrategy.THROUGH;
         this.writeBehindFrequency = 5 * ONE_MINUTE;
     }
 
-    public static Policy getDefaultPolicy() {
-        if (Policy.defaultPolicy == null) {
-            Policy.defaultPolicy = new Policy();
+    public static CachePolicy getDefaultPolicy() {
+        if (CachePolicy.defaultCachePolicy == null) {
+            CachePolicy.defaultCachePolicy = new CachePolicy();
         }
 
-        return Policy.defaultPolicy;
+        return CachePolicy.defaultCachePolicy;
     }
 
     public long getCacheSize() {
@@ -52,15 +52,15 @@ public final class Policy {
         return this.invalidationLifeTime;
     }
 
-    public Invalidation getInvalidationStrategy() {
+    public InvalidationStrategy getInvalidationStrategy() {
         return this.invalidationStrategy;
     }
 
-    public Eviction getEvictionStrategy() {
+    public EvictionStrategy getEvictionStrategy() {
         return this.evictionStrategy;
     }
 
-    public Write getWriteStrategy() {
+    public WriteStrategy getWriteStrategy() {
         return this.writeStrategy;
     }
 
@@ -69,56 +69,56 @@ public final class Policy {
     }
 
     public static class Builder {
-        private final Policy policy;
+        private final CachePolicy cachePolicy;
 
         public Builder() {
-            this.policy = new Policy();
+            this.cachePolicy = new CachePolicy();
         }
 
         public Builder delay(long delay) {
-            this.policy.delay = delay;
+            this.cachePolicy.delay = delay;
 
             return this;
         }
 
         public Builder invalidationFrequency(long invalidationFrequency) {
-            this.policy.invalidationFrequency = invalidationFrequency;
+            this.cachePolicy.invalidationFrequency = invalidationFrequency;
 
             return this;
         }
 
-        public Builder invalidationStrategy(Invalidation invalidationStrategy) {
-            this.policy.invalidationStrategy = invalidationStrategy;
+        public Builder invalidationStrategy(InvalidationStrategy invalidationStrategy) {
+            this.cachePolicy.invalidationStrategy = invalidationStrategy;
 
             return this;
         }
 
         public Builder invalidationLifeTime(long invalidationLifeTime) {
-            this.policy.invalidationLifeTime = invalidationLifeTime;
+            this.cachePolicy.invalidationLifeTime = invalidationLifeTime;
 
             return this;
         }
 
-        public Builder evictionStrategy(Eviction evictionStrategy) {
-            this.policy.evictionStrategy = evictionStrategy;
+        public Builder evictionStrategy(EvictionStrategy evictionStrategy) {
+            this.cachePolicy.evictionStrategy = evictionStrategy;
 
             return this;
         }
 
-        public Builder writeStrategy(Write writeStrategy) {
-            this.policy.writeStrategy = writeStrategy;
+        public Builder writeStrategy(WriteStrategy writeStrategy) {
+            this.cachePolicy.writeStrategy = writeStrategy;
 
             return this;
         }
 
         public Builder writeBehindFrequency(long writeBehindFrequency) {
-            this.policy.writeBehindFrequency = writeBehindFrequency;
+            this.cachePolicy.writeBehindFrequency = writeBehindFrequency;
 
             return this;
         }
 
-        public Policy build() {
-            return this.policy;
+        public CachePolicy build() {
+            return this.cachePolicy;
         }
     }
 }

@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A lightweight implementation of a general purpose cache created for education purpose.
- *
+ * <p>
  * Feel free to create a pull request if you think this can be optimized :)
  *
  * @author seyedsahil
@@ -21,36 +21,41 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class Cache {
     private static final boolean DEBUG_MODE = true;
     private static final Random random = new Random();
+
     private static Cache instance;
+
     private final Map<String, CacheableWrapper> cachedDataStore;
-    private final Source dataSource;
+    private final DataSource dataSource;
     private final LinkedList<String> evictionQueue;
     private final LinkedList<CacheableWrapper> writeBehindQueue;
     private final Timer invalidationTimer;
     private final Timer writeBehindTimer;
-    private final Policy cachePolicy;
+    private final CachePolicy cachePolicy;
     private boolean active;
 
-    private Cache(Source dataSource) {
-        this(dataSource, Policy.getDefaultPolicy());
+    private Cache(DataSource dataSource) {
+        this(dataSource, CachePolicy.getDefaultPolicy());
     }
 
-    private Cache(Source dataSource, Policy cachePolicy) {
+    private Cache(DataSource dataSource, CachePolicy cachePolicy) {
         this.cachedDataStore = new ConcurrentHashMap<>();
         this.dataSource = dataSource;
         this.cachePolicy = cachePolicy;
+
         this.evictionQueue = new LinkedList<>();
         this.writeBehindQueue = new LinkedList<>();
+
         this.invalidationTimer = new Timer();
+        this.writeBehindTimer = new Timer();
+
         this.invalidationTimer.schedule(new TimerTask() {
             @Override
             public void run() {
                 invalidate();
             }
         }, this.cachePolicy.getDelay(), this.cachePolicy.getInvalidationFrequency());
-        this.writeBehindTimer = new Timer();
 
-        if (this.cachePolicy.getWriteStrategy() == Write.BEHIND) {
+        if (this.cachePolicy.getWriteStrategy() == WriteStrategy.BEHIND) {
             this.writeBehindTimer.schedule(new TimerTask() {
                 @Override
                 public void run() {
@@ -62,9 +67,9 @@ public final class Cache {
         this.active = true;
     }
 
-    public static Cache getInstance(Source source) {
+    public static Cache getInstance(DataSource dataSource) {
         if (Cache.instance == null) {
-            Cache.instance = new Cache(source);
+            Cache.instance = new Cache(dataSource);
         }
 
         return Cache.instance;
@@ -81,31 +86,29 @@ public final class Cache {
             throw new RuntimeException("Cache is not active");
         }
 
-        if (this.cachedDataStore.containsKey(key)) {
+        CacheableWrapper cachedRecord = this.cachedDataStore.get(key);
+
+        if (Util.usable(cachedRecord)) {
             debug("action=get key={0} status=hit", key);
 
-            CacheableWrapper wrapper = this.cachedDataStore.get(key);
+            cachedRecord.accessCount++;
+            cachedRecord.lastAccessedTime = System.currentTimeMillis();
 
-            wrapper.accessCount++;
-
-            wrapper.lastAccessedTime = System.currentTimeMillis();
-
-            return Optional.of(wrapper.dataRecord);
+            return Optional.of(cachedRecord.data);
         }
 
         debug("action=get key={0} status=miss", key);
-
         debug("action=get key={0} event=load source={1}", key, this.dataSource.getName());
 
-        Cacheable dataRecord = this.dataSource.load(key);
+        Cacheable data = this.dataSource.load(key);
 
-        if (dataRecord == null) {
+        if (!Util.usable(data)) {
             debug("action=get key={0} event=load source={1} status=miss", key, this.dataSource.getName());
 
             return Optional.empty();
         }
 
-        if (this.cachedDataStore.size() == this.cachePolicy.getCacheSize()) {
+        if (full()) {
             debug("action=get key={0} event=evict reason=full strategy={1}", key, this.cachePolicy.getEvictionStrategy());
 
             this.evict();
@@ -113,21 +116,25 @@ public final class Cache {
 
         debug("action=get key={0} event=store status=success", key);
 
-        this.cachedDataStore.put(key, new CacheableWrapper(key, dataRecord));
+        this.cachedDataStore.put(key, new CacheableWrapper(key, data));
         this.evictionQueue.offer(key);
 
-        return Optional.of(dataRecord);
+        return Optional.of(data);
     }
 
-    public synchronized void put(String key, Cacheable dataRecord) {
+    private boolean full() {
+        return this.cachedDataStore.size() == this.cachePolicy.getCacheSize();
+    }
+
+    public synchronized void put(String key, Cacheable data) {
         if (!this.active) {
             throw new RuntimeException("Cache is not active");
         }
 
+        CacheableWrapper freshRecord = new CacheableWrapper(key, data);
         CacheableWrapper cachedRecord = this.cachedDataStore.get(key);
-        CacheableWrapper freshRecord = new CacheableWrapper(key, dataRecord);
 
-        if (cachedRecord != null) {
+        if (Util.usable(cachedRecord)) {
             debug("action=put key={0} event=check status=present source=cache", key);
 
             freshRecord.accessCount = cachedRecord.accessCount;
@@ -145,26 +152,26 @@ public final class Cache {
         applyWriteStrategy(freshRecord);
     }
 
-    private synchronized void applyWriteStrategy(CacheableWrapper record) {
-        String key = record.key;
+    private synchronized void applyWriteStrategy(CacheableWrapper cachedRecord) {
+        String key = cachedRecord.key;
 
-        debug("action=put key={0} event=write status=progreess source={1}", key, this.dataSource.getName());
+        debug("action=put key={0} event=write status=progress source={1}", key, this.dataSource.getName());
 
-        Write writeStrategy = this.cachePolicy.getWriteStrategy();
+        WriteStrategy writeStrategy = this.cachePolicy.getWriteStrategy();
 
-        if (writeStrategy == Write.THROUGH) {
-            this.dataSource.save(key, record.dataRecord);
+        if (writeStrategy == WriteStrategy.THROUGH) {
+            this.dataSource.save(key, cachedRecord.data);
 
             debug("action=put key={0} event=write status=success source={1} strategy={2}", key, this.dataSource.getName(), writeStrategy);
-        } else if (writeStrategy == Write.BEHIND) {
-            this.writeBehindQueue.add(record);
+        } else if (writeStrategy == WriteStrategy.BEHIND) {
+            this.writeBehindQueue.add(cachedRecord);
 
             debug("action=put key={0} event=write status=success source={1} strategy={2}", key, this.dataSource.getName(), writeStrategy);
         }
     }
 
     private synchronized void writeBehind() {
-        Write writeStrategy = this.cachePolicy.getWriteStrategy();
+        WriteStrategy writeStrategy = this.cachePolicy.getWriteStrategy();
 
         if (this.writeBehindQueue.isEmpty()) {
             debug("action=sync event=save status=skipped reason=noData source={0} strategy={1}", this.dataSource.getName(), writeStrategy);
@@ -172,10 +179,10 @@ public final class Cache {
             return;
         }
 
-        this.writeBehindQueue.forEach(record -> {
-            debug("action=sync key={0} event=save status=success source={0} source={1} strategy={2}", record.key, this.dataSource.getName(), writeStrategy);
+        this.writeBehindQueue.forEach(cachedRecord -> {
+            debug("action=sync key={0} event=save status=success source={0} source={1} strategy={2}", cachedRecord.key, this.dataSource.getName(), writeStrategy);
 
-            this.dataSource.save(record.key, record.dataRecord);
+            this.dataSource.save(cachedRecord.key, cachedRecord.data);
         });
 
         debug("action=sync event=save status=success source={0} strategy={1}", this.dataSource.getName(), writeStrategy);
@@ -190,33 +197,33 @@ public final class Cache {
             return;
         }
 
-        Eviction evictionStrategy = this.cachePolicy.getEvictionStrategy();
+        EvictionStrategy evictionStrategy = this.cachePolicy.getEvictionStrategy();
 
-        if (evictionStrategy == Eviction.FIFO) {
+        if (evictionStrategy == EvictionStrategy.FIFO) {
             String key = this.evictionQueue.poll();
 
             this.cachedDataStore.remove(key);
 
             debug("action=get key={0} event=evict status=success strategy={1}", key, evictionStrategy);
-        } else if (evictionStrategy == Eviction.LRU) {
-            Map.Entry<String, CacheableWrapper> record = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().lastAccessedTime - entry2.getValue().lastAccessedTime)).get();
+        } else if (evictionStrategy == EvictionStrategy.LRU) {
+            Map.Entry<String, CacheableWrapper> cachedRecord = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().lastAccessedTime - entry2.getValue().lastAccessedTime)).get();
 
-            String key = record.getKey();
-
-            this.evictionQueue.remove(key);
-            this.cachedDataStore.remove(key);
-
-            debug("action=get key={0} event=evict status=success strategy={1}", key, evictionStrategy);
-        } else if (evictionStrategy == Eviction.LFU) {
-            Map.Entry<String, CacheableWrapper> record = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().accessCount - entry2.getValue().accessCount)).get();
-
-            String key = record.getKey();
+            String key = cachedRecord.getKey();
 
             this.evictionQueue.remove(key);
             this.cachedDataStore.remove(key);
 
             debug("action=get key={0} event=evict status=success strategy={1}", key, evictionStrategy);
-        } else if (evictionStrategy == Eviction.RANDOM) {
+        } else if (evictionStrategy == EvictionStrategy.LFU) {
+            Map.Entry<String, CacheableWrapper> cachedRecord = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().accessCount - entry2.getValue().accessCount)).get();
+
+            String key = cachedRecord.getKey();
+
+            this.evictionQueue.remove(key);
+            this.cachedDataStore.remove(key);
+
+            debug("action=get key={0} event=evict status=success strategy={1}", key, evictionStrategy);
+        } else if (evictionStrategy == EvictionStrategy.RANDOM) {
             int randomIndex = Cache.random.nextInt(evictionQueue.size());
             String key = this.evictionQueue.get(randomIndex);
 
@@ -251,9 +258,9 @@ public final class Cache {
 
         boolean invalidated = false;
 
-        Invalidation invalidationStrategy = this.cachePolicy.getInvalidationStrategy();
+        InvalidationStrategy invalidationStrategy = this.cachePolicy.getInvalidationStrategy();
 
-        if (invalidationStrategy == Invalidation.TTL) {
+        if (invalidationStrategy == InvalidationStrategy.TTL) {
             if (currentTime - record.createdTime > this.cachePolicy.getInvalidationLifeTime()) {
                 iterator.remove();
 
@@ -263,9 +270,8 @@ public final class Cache {
 
                 invalidated = true;
             }
-        } else if (invalidationStrategy == Invalidation.TIME_BASED) {
+        } else if (invalidationStrategy == InvalidationStrategy.TIME_BASED) {
             if (currentTime - record.lastAccessedTime > this.cachePolicy.getInvalidationLifeTime()) {
-
                 iterator.remove();
 
                 this.evictionQueue.remove(key);
@@ -274,10 +280,8 @@ public final class Cache {
 
                 invalidated = true;
             }
-        } else if (invalidationStrategy == Invalidation.REFRESH) {
+        } else if (invalidationStrategy == InvalidationStrategy.REFRESH) {
             if (currentTime - record.createdTime > cachePolicy.getInvalidationLifeTime()) {
-                debug("status: invalidation, key: " + key + ", mode: refresh");
-
                 iterator.remove();
 
                 this.evictionQueue.remove(key);
@@ -286,20 +290,19 @@ public final class Cache {
 
                 debug("action=invalidate key={0} event=refresh source={1} strategy={2}", this.dataSource.getName(), invalidationStrategy);
 
-                Cacheable dataRecord = this.dataSource.load(key);
+                Cacheable data = this.dataSource.load(key);
 
-                if (dataRecord == null) {
+                if (!Util.usable(data)) {
                     debug("action=invalidate key={0} event=refresh status=skipped reason=unavailable source={1} strategy={2}", this.dataSource.getName(), invalidationStrategy);
 
                     return;
                 }
 
-                CacheableWrapper freshRecord = new CacheableWrapper(key, dataRecord);
+                CacheableWrapper freshRecord = new CacheableWrapper(key, data);
 
                 freshRecord.accessCount = record.accessCount;
 
                 this.cachedDataStore.put(key, freshRecord);
-
                 this.evictionQueue.offer(key);
 
                 debug("action=invalidate key={0} event=refresh status=success source={1} strategy={2}", this.dataSource.getName(), invalidationStrategy);
@@ -314,11 +317,11 @@ public final class Cache {
     }
 
     public synchronized void shutdown(boolean force) {
-        Write writeStrategy = this.cachePolicy.getWriteStrategy();
+        WriteStrategy writeStrategy = this.cachePolicy.getWriteStrategy();
 
-        if (force || writeStrategy == Write.THROUGH) {
+        if (force || writeStrategy == WriteStrategy.THROUGH) {
             shutdown();
-        } else if (writeStrategy == Write.BEHIND) {
+        } else if (writeStrategy == WriteStrategy.BEHIND) {
             this.writeBehind();
 
             shutdown();
@@ -343,14 +346,14 @@ public final class Cache {
     }
 
     private static class CacheableWrapper {
-        private final Cacheable dataRecord;
+        private final Cacheable data;
         private final long createdTime;
         private final String key;
         private long lastAccessedTime;
         private long accessCount;
 
-        public CacheableWrapper(String key, Cacheable dataRecord) {
-            this.dataRecord = dataRecord;
+        public CacheableWrapper(String key, Cacheable data) {
+            this.data = data;
             this.createdTime = System.currentTimeMillis();
             this.lastAccessedTime = createdTime;
             this.accessCount = 1;
