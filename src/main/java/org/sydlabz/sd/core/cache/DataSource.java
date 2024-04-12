@@ -12,4 +12,6 @@ public interface DataSource {
     void save(String key, Cacheable data);
 
     void update(String key, Cacheable data);
+
+    void sync();
 }

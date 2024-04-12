@@ -8,7 +8,7 @@ import static javax.management.timer.Timer.ONE_MINUTE;
  */
 public final class CachePolicy {
     private static CachePolicy defaultCachePolicy;
-    private final long cacheSize;
+    private long cacheSize;
     private long delay;
     private long invalidationFrequency;
     private InvalidationStrategy invalidationStrategy;
@@ -73,6 +73,12 @@ public final class CachePolicy {
 
         public Builder() {
             this.cachePolicy = new CachePolicy();
+        }
+
+        public Builder cacheSize(int cacheSize) {
+            this.cachePolicy.cacheSize = cacheSize;
+
+            return this;
         }
 
         public Builder delay(long delay) {

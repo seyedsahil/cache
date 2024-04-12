@@ -1,6 +1,5 @@
 package org.sydlabz.sd.core.cache;
 
-import java.text.MessageFormat;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Map;
@@ -22,32 +21,39 @@ public final class Cache {
     private static final boolean DEBUG_MODE = true;
     private static final Random random = new Random();
 
-    private static Cache instance;
-
     private final Map<String, CacheableWrapper> cachedDataStore;
     private final DataSource dataSource;
     private final LinkedList<String> evictionQueue;
-    private final LinkedList<DataSourceItem> writeBehindQueue;
+    private final LinkedList<DataSourceItem> dataSyncQueue;
     private final Timer invalidationTimer;
     private final Timer writeBehindTimer;
     private final CachePolicy cachePolicy;
+    private final String name;
     private boolean active;
 
-    private Cache(DataSource dataSource) {
-        this(dataSource, CachePolicy.getDefaultPolicy());
+    public Cache(String name, DataSource dataSource) {
+        this(name, dataSource, CachePolicy.getDefaultPolicy());
     }
 
-    private Cache(DataSource dataSource, CachePolicy cachePolicy) {
+    public Cache(String name, DataSource dataSource, CachePolicy cachePolicy) {
+        this.name = name;
+
         this.cachedDataStore = new ConcurrentHashMap<>();
         this.dataSource = dataSource;
         this.cachePolicy = cachePolicy;
 
         this.evictionQueue = new LinkedList<>();
-        this.writeBehindQueue = new LinkedList<>();
+        this.dataSyncQueue = new LinkedList<>();
 
         this.invalidationTimer = new Timer();
         this.writeBehindTimer = new Timer();
 
+        this.attachBackgroundTasks();
+
+        this.active = true;
+    }
+
+    private void attachBackgroundTasks() {
         this.invalidationTimer.schedule(new TimerTask() {
             @Override
             public void run() {
@@ -63,22 +69,6 @@ public final class Cache {
                 }
             }, this.cachePolicy.getDelay(), this.cachePolicy.getWriteBehindFrequency());
         }
-
-        this.active = true;
-    }
-
-    public static Cache getInstance(DataSource dataSource) {
-        if (Cache.instance == null) {
-            Cache.instance = new Cache(dataSource);
-        }
-
-        return Cache.instance;
-    }
-
-    private static void debug(String text, Object... args) {
-        if (DEBUG_MODE) {
-            System.out.println(MessageFormat.format(text, args));
-        }
     }
 
     public synchronized Optional<Cacheable> get(final String key) {
@@ -90,22 +80,9 @@ public final class Cache {
 
         if (Util.usable(cachedRecord)) {
             return fromCache(cachedRecord);
+        } else {
+            return fromDataSource(key);
         }
-
-        Cacheable data = this.dataSource.load(key);
-
-        if (!Util.usable(data)) {
-            return Optional.empty();
-        }
-
-        if (full()) {
-            this.doCacheEviction();
-        }
-
-        this.cachedDataStore.put(key, new CacheableWrapper(key, data));
-        this.evictionQueue.offer(key);
-
-        return Optional.of(data);
     }
 
     private synchronized Optional<Cacheable> fromCache(CacheableWrapper cachedRecord) {
@@ -124,6 +101,23 @@ public final class Cache {
         return Optional.of(cachedRecord.data);
     }
 
+    private Optional<Cacheable> fromDataSource(String key) {
+        Cacheable data = this.dataSource.load(key);
+
+        if (!Util.usable(data)) {
+            return Optional.empty();
+        }
+
+        if (this.full()) {
+            this.doCacheEviction();
+        }
+
+        this.cachedDataStore.put(key, new CacheableWrapper(key, data));
+        this.evictionQueue.offer(key);
+
+        return Optional.of(data);
+    }
+
     private boolean full() {
         return this.cachedDataStore.size() == this.cachePolicy.getCacheSize();
     }
@@ -135,25 +129,33 @@ public final class Cache {
 
         CacheableWrapper freshRecord = new CacheableWrapper(key, data);
         CacheableWrapper cachedRecord = this.cachedDataStore.get(key);
-        EvictionStrategy evictionStrategy = this.cachePolicy.getEvictionStrategy();
         boolean isUpdate = false;
 
         if (Util.usable(cachedRecord)) {
             isUpdate = true;
             freshRecord.accessCount = cachedRecord.accessCount + 1;
-
-            if (evictionStrategy != EvictionStrategy.FIFO) {
-                this.evictionQueue.remove(key);
-            }
         }
 
         this.cachedDataStore.put(key, freshRecord);
 
-        if (evictionStrategy != EvictionStrategy.FIFO) {
-            this.evictionQueue.offer(key);
-        }
+        this.updateEvictionQueue(freshRecord, !isUpdate);
+        this.applyWriteStrategy(freshRecord, isUpdate);
+    }
 
-        applyWriteStrategy(freshRecord, isUpdate);
+    private synchronized void updateEvictionQueue(CacheableWrapper cachedRecord, boolean freshRecord) {
+        String key = cachedRecord.key;
+
+        if (this.cachePolicy.getEvictionStrategy() == EvictionStrategy.FIFO) {
+            if (!freshRecord) {
+                this.evictionQueue.remove(key);
+            }
+
+            this.evictionQueue.offer(key);
+        } else {
+            if (freshRecord) {
+                this.evictionQueue.offer(key);
+            }
+        }
     }
 
     private synchronized void applyWriteStrategy(CacheableWrapper cachedRecord, boolean isUpdate) {
@@ -161,18 +163,22 @@ public final class Cache {
         WriteStrategy writeStrategy = this.cachePolicy.getWriteStrategy();
 
         if (writeStrategy == WriteStrategy.WRITE_THROUGH) {
-            this.dataSource.save(key, cachedRecord.data);
+            if (isUpdate) {
+                this.dataSource.update(key, cachedRecord.data);
+            } else {
+                this.dataSource.save(key, cachedRecord.data);
+            }
         } else if (writeStrategy == WriteStrategy.WRITE_BEHIND) {
-            this.writeBehindQueue.add(new DataSourceItem(cachedRecord, isUpdate));
+            this.dataSyncQueue.add(new DataSourceItem(cachedRecord, isUpdate));
         }
     }
 
     private synchronized void syncWithDataSource() {
-        if (this.writeBehindQueue.isEmpty()) {
+        if (this.dataSyncQueue.isEmpty()) {
             return;
         }
 
-        this.writeBehindQueue.forEach(dataSourceItem -> {
+        this.dataSyncQueue.forEach(dataSourceItem -> {
             CacheableWrapper cachedRecord = dataSourceItem.cachedRecord;
 
             if (dataSourceItem.isUpdate) {
@@ -181,7 +187,7 @@ public final class Cache {
                 this.dataSource.save(cachedRecord.key, cachedRecord.data);
             }
         });
-        this.writeBehindQueue.clear();
+        this.dataSyncQueue.clear();
     }
 
     private synchronized void doCacheEviction() {
@@ -196,15 +202,15 @@ public final class Cache {
         } else if (evictionStrategy == EvictionStrategy.LRU) {
             Map.Entry<String, CacheableWrapper> cachedRecord = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().lastAccessedTime - entry2.getValue().lastAccessedTime)).get();
 
-            delete(cachedRecord.getKey());
+            this.delete(cachedRecord.getKey());
         } else if (evictionStrategy == EvictionStrategy.LFU) {
             Map.Entry<String, CacheableWrapper> cachedRecord = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().accessCount - entry2.getValue().accessCount)).get();
 
-            delete(cachedRecord.getKey());
+            this.delete(cachedRecord.getKey());
         } else if (evictionStrategy == EvictionStrategy.RANDOM) {
             int randomIndex = Cache.random.nextInt(evictionQueue.size());
 
-            delete(this.evictionQueue.get(randomIndex));
+            this.delete(this.evictionQueue.get(randomIndex));
         }
     }
 
@@ -222,8 +228,10 @@ public final class Cache {
         Iterator<String> iterator = this.cachedDataStore.keySet().iterator();
 
         while (iterator.hasNext()) {
-            applyInvalidationStrategy(currentTime, iterator);
+            this.applyInvalidationStrategy(currentTime, iterator);
         }
+
+        System.out.println(this);
     }
 
     private synchronized void applyInvalidationStrategy(long currentTime, Iterator<String> iterator) {
@@ -233,15 +241,15 @@ public final class Cache {
 
         if (invalidationStrategy == InvalidationStrategy.TIME_TO_LIVE) {
             if (currentTime - record.createdTime > this.cachePolicy.getInvalidationLifeTime()) {
-                delete(key, iterator);
+                this.delete(key, iterator);
             }
         } else if (invalidationStrategy == InvalidationStrategy.TIME_BASED) {
             if (currentTime - record.lastAccessedTime > this.cachePolicy.getInvalidationLifeTime()) {
-                delete(key, iterator);
+                this.delete(key, iterator);
             }
         } else if (invalidationStrategy == InvalidationStrategy.REFRESH) {
             if (currentTime - record.createdTime > cachePolicy.getInvalidationLifeTime()) {
-                delete(key, iterator);
+                this.delete(key);
 
                 Cacheable data = this.dataSource.load(key);
 
@@ -251,7 +259,7 @@ public final class Cache {
 
                 CacheableWrapper freshRecord = new CacheableWrapper(key, data);
 
-                freshRecord.accessCount = record.accessCount;
+                freshRecord.accessCount = record.accessCount + 1;
                 this.cachedDataStore.put(key, freshRecord);
                 this.evictionQueue.offer(key);
             }
@@ -267,11 +275,11 @@ public final class Cache {
         WriteStrategy writeStrategy = this.cachePolicy.getWriteStrategy();
 
         if (force || writeStrategy == WriteStrategy.WRITE_THROUGH) {
-            shutdown();
+            this.shutdown();
         } else if (writeStrategy == WriteStrategy.WRITE_BEHIND) {
             this.syncWithDataSource();
 
-            shutdown();
+            this.shutdown();
         }
     }
 
@@ -281,21 +289,22 @@ public final class Cache {
         this.writeBehindTimer.cancel();
         this.cachedDataStore.clear();
         this.evictionQueue.clear();
-        this.writeBehindQueue.clear();
+        this.dataSyncQueue.clear();
     }
 
     @Override
     public String toString() {
         return "{" +
+                "nm=" + this.name +
                 "ds=" + this.cachedDataStore.values() +
                 ", eq=" + this.evictionQueue +
                 '}';
     }
 
     private static class CacheableWrapper {
+        private final String key;
         private final Cacheable data;
         private final long createdTime;
-        private final String key;
         private long lastAccessedTime;
         private long accessCount;
 
@@ -318,13 +327,6 @@ public final class Cache {
         }
     }
 
-    private static class DataSourceItem {
-        private final CacheableWrapper cachedRecord;
-        private final boolean isUpdate;
-
-        public DataSourceItem(CacheableWrapper cachedRecord, boolean isUpdate) {
-            this.cachedRecord = cachedRecord;
-            this.isUpdate = isUpdate;
-        }
+    private record DataSourceItem(CacheableWrapper cachedRecord, boolean isUpdate) {
     }
 }
