@@ -9,5 +9,9 @@ public interface DataSource {
 
     String getName();
 
-    void save(String key, Cacheable dataRecord);
+    void save(String key, Cacheable data);
+
+    void update(String key, Cacheable data);
+
+    void sync();
 }

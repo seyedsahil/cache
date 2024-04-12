@@ -6,6 +6,6 @@ package org.sydlabz.sd.core.cache;
  */
 public enum InvalidationStrategy {
     TIME_BASED,
-    TTL,
+    TIME_TO_LIVE,
     REFRESH
 }

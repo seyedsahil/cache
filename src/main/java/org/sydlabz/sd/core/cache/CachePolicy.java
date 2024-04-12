@@ -8,7 +8,7 @@ import static javax.management.timer.Timer.ONE_MINUTE;
  */
 public final class CachePolicy {
     private static CachePolicy defaultCachePolicy;
-    private final long cacheSize;
+    private long cacheSize;
     private long delay;
     private long invalidationFrequency;
     private InvalidationStrategy invalidationStrategy;
@@ -21,10 +21,10 @@ public final class CachePolicy {
         this.cacheSize = 16;
         this.invalidationFrequency = 5 * ONE_MINUTE;
         this.delay = ONE_MINUTE;
-        this.invalidationStrategy = InvalidationStrategy.TTL;
+        this.invalidationStrategy = InvalidationStrategy.TIME_TO_LIVE;
         this.invalidationLifeTime = 3 * ONE_MINUTE;
         this.evictionStrategy = EvictionStrategy.FIFO;
-        this.writeStrategy = WriteStrategy.THROUGH;
+        this.writeStrategy = WriteStrategy.WRITE_THROUGH;
         this.writeBehindFrequency = 5 * ONE_MINUTE;
     }
 
@@ -73,6 +73,12 @@ public final class CachePolicy {
 
         public Builder() {
             this.cachePolicy = new CachePolicy();
+        }
+
+        public Builder cacheSize(int cacheSize) {
+            this.cachePolicy.cacheSize = cacheSize;
+
+            return this;
         }
 
         public Builder delay(long delay) {
