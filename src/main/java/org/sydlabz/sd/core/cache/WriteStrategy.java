@@ -5,6 +5,6 @@ package org.sydlabz.sd.core.cache;
  * @version 1.0
  */
 public enum WriteStrategy {
-    THROUGH,
-    BEHIND
+    WRITE_THROUGH,
+    WRITE_BEHIND
 }

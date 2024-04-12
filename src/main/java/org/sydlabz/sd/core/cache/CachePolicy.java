@@ -21,10 +21,10 @@ public final class CachePolicy {
         this.cacheSize = 16;
         this.invalidationFrequency = 5 * ONE_MINUTE;
         this.delay = ONE_MINUTE;
-        this.invalidationStrategy = InvalidationStrategy.TTL;
+        this.invalidationStrategy = InvalidationStrategy.TIME_TO_LIVE;
         this.invalidationLifeTime = 3 * ONE_MINUTE;
         this.evictionStrategy = EvictionStrategy.FIFO;
-        this.writeStrategy = WriteStrategy.THROUGH;
+        this.writeStrategy = WriteStrategy.WRITE_THROUGH;
         this.writeBehindFrequency = 5 * ONE_MINUTE;
     }
 
