@@ -1,11 +1,6 @@
 package org.sydlabz.sd.core.cache.test;
 
-import org.sydlabz.sd.core.cache.Cache;
-import org.sydlabz.sd.core.cache.CachePolicy;
-import org.sydlabz.sd.core.cache.DataSource;
-import org.sydlabz.sd.core.cache.EvictionStrategy;
-import org.sydlabz.sd.core.cache.InvalidationStrategy;
-import org.sydlabz.sd.core.cache.WriteStrategy;
+import org.sydlabz.sd.core.cache.*;
 
 import javax.management.timer.Timer;
 

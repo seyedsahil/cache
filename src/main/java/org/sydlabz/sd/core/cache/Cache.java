@@ -1,13 +1,9 @@
 package org.sydlabz.sd.core.cache;
 
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Random;
-import java.util.Timer;
-import java.util.TimerTask;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 /**
  * A lightweight implementation of a general purpose cache created for education purpose.
@@ -18,10 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * @version 1.0
  */
 public final class Cache {
-    private static final boolean DEBUG_MODE = true;
     private static final Random random = new Random();
 
-    private final Map<String, CacheableWrapper> cachedDataStore;
+    private final BucketMap dataStoreMap;
     private final DataSource dataSource;
     private final LinkedList<String> evictionQueue;
     private final LinkedList<DataSourceItem> dataSyncQueue;
@@ -29,16 +24,14 @@ public final class Cache {
     private final Timer writeBehindTimer;
     private final CachePolicy cachePolicy;
     private final String name;
+    private final Executor executor;
+    private CountDownLatch latch;
     private boolean active;
-
-    public Cache(String name, DataSource dataSource) {
-        this(name, dataSource, CachePolicy.getDefaultPolicy());
-    }
 
     public Cache(String name, DataSource dataSource, CachePolicy cachePolicy) {
         this.name = name;
 
-        this.cachedDataStore = new ConcurrentHashMap<>();
+        this.dataStoreMap = new BucketMap(16);
         this.dataSource = dataSource;
         this.cachePolicy = cachePolicy;
 
@@ -48,12 +41,14 @@ public final class Cache {
         this.invalidationTimer = new Timer();
         this.writeBehindTimer = new Timer();
 
+        this.executor = Executors.newCachedThreadPool();
+
         this.attachBackgroundTasks();
 
         this.active = true;
     }
 
-    private void attachBackgroundTasks() {
+    private synchronized void attachBackgroundTasks() {
         this.invalidationTimer.schedule(new TimerTask() {
             @Override
             public void run() {
@@ -76,7 +71,7 @@ public final class Cache {
             throw new RuntimeException("get called with inactive cache");
         }
 
-        CacheableWrapper cachedRecord = this.cachedDataStore.get(key);
+        CacheableWrapper cachedRecord = this.dataStoreMap.get(key);
 
         if (Util.usable(cachedRecord)) {
             return fromCache(cachedRecord);
@@ -86,10 +81,10 @@ public final class Cache {
     }
 
     private synchronized Optional<Cacheable> fromCache(CacheableWrapper cachedRecord) {
-        String key = cachedRecord.key;
+        String key = cachedRecord.getKey();
 
-        cachedRecord.accessCount++;
-        cachedRecord.lastAccessedTime = System.currentTimeMillis();
+        cachedRecord.incrementAccessCount();
+        cachedRecord.setLastAccessedTime(System.currentTimeMillis());
 
         EvictionStrategy evictionStrategy = this.cachePolicy.getEvictionStrategy();
 
@@ -98,10 +93,10 @@ public final class Cache {
             this.evictionQueue.offer(key);
         }
 
-        return Optional.of(cachedRecord.data);
+        return Optional.of(cachedRecord.getData());
     }
 
-    private Optional<Cacheable> fromDataSource(String key) {
+    private synchronized Optional<Cacheable> fromDataSource(String key) {
         Cacheable data = this.dataSource.load(key);
 
         if (!Util.usable(data)) {
@@ -112,14 +107,18 @@ public final class Cache {
             this.doCacheEviction();
         }
 
-        this.cachedDataStore.put(key, new CacheableWrapper(key, data));
+        this.dataStoreMap.put(key, new CacheableWrapper(key, data));
         this.evictionQueue.offer(key);
 
         return Optional.of(data);
     }
 
-    private boolean full() {
-        return this.cachedDataStore.size() == this.cachePolicy.getCacheSize();
+    private synchronized boolean full() {
+        return this.dataStoreMap.size() == this.cachePolicy.getCacheSize();
+    }
+
+    public synchronized boolean isFull() {
+        return this.full();
     }
 
     public synchronized void put(String key, Cacheable data) {
@@ -128,22 +127,22 @@ public final class Cache {
         }
 
         CacheableWrapper freshRecord = new CacheableWrapper(key, data);
-        CacheableWrapper cachedRecord = this.cachedDataStore.get(key);
+        CacheableWrapper cachedRecord = this.dataStoreMap.get(key);
         boolean isUpdate = false;
 
         if (Util.usable(cachedRecord)) {
             isUpdate = true;
-            freshRecord.accessCount = cachedRecord.accessCount + 1;
+            freshRecord.setAccessCount(cachedRecord.getAccessCount() + 1);
         }
 
-        this.cachedDataStore.put(key, freshRecord);
+        this.dataStoreMap.put(key, freshRecord);
 
-        this.updateEvictionQueue(freshRecord, !isUpdate);
+        this.addToEvictionQueue(freshRecord, !isUpdate);
         this.applyWriteStrategy(freshRecord, isUpdate);
     }
 
-    private synchronized void updateEvictionQueue(CacheableWrapper cachedRecord, boolean freshRecord) {
-        String key = cachedRecord.key;
+    private synchronized void addToEvictionQueue(CacheableWrapper cachedRecord, boolean freshRecord) {
+        String key = cachedRecord.getKey();
 
         if (this.cachePolicy.getEvictionStrategy() == EvictionStrategy.FIFO) {
             if (!freshRecord) {
@@ -159,14 +158,14 @@ public final class Cache {
     }
 
     private synchronized void applyWriteStrategy(CacheableWrapper cachedRecord, boolean isUpdate) {
-        String key = cachedRecord.key;
+        String key = cachedRecord.getKey();
         WriteStrategy writeStrategy = this.cachePolicy.getWriteStrategy();
 
         if (writeStrategy == WriteStrategy.WRITE_THROUGH) {
             if (isUpdate) {
-                this.dataSource.update(key, cachedRecord.data);
+                this.dataSource.update(key, cachedRecord.getData());
             } else {
-                this.dataSource.save(key, cachedRecord.data);
+                this.dataSource.save(key, cachedRecord.getData());
             }
         } else if (writeStrategy == WriteStrategy.WRITE_BEHIND) {
             this.dataSyncQueue.add(new DataSourceItem(cachedRecord, isUpdate));
@@ -179,77 +178,121 @@ public final class Cache {
         }
 
         this.dataSyncQueue.forEach(dataSourceItem -> {
-            CacheableWrapper cachedRecord = dataSourceItem.cachedRecord;
+            CacheableWrapper cachedRecord = dataSourceItem.cachedRecord();
 
-            if (dataSourceItem.isUpdate) {
-                this.dataSource.update(cachedRecord.key, cachedRecord.data);
+            if (dataSourceItem.isUpdate()) {
+                this.dataSource.update(cachedRecord.getKey(), cachedRecord.getData());
             } else {
-                this.dataSource.save(cachedRecord.key, cachedRecord.data);
+                this.dataSource.save(cachedRecord.getKey(), cachedRecord.getData());
             }
         });
         this.dataSyncQueue.clear();
     }
 
     private synchronized void doCacheEviction() {
-        if (this.evictionQueue.isEmpty() || this.cachedDataStore.isEmpty()) {
+        if (this.evictionQueue.isEmpty() || this.dataStoreMap.isEmpty()) {
             return;
         }
 
         EvictionStrategy evictionStrategy = this.cachePolicy.getEvictionStrategy();
 
         if (evictionStrategy == EvictionStrategy.FIFO) {
-            this.cachedDataStore.remove(this.evictionQueue.poll());
-        } else if (evictionStrategy == EvictionStrategy.LRU) {
-            Map.Entry<String, CacheableWrapper> cachedRecord = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().lastAccessedTime - entry2.getValue().lastAccessedTime)).get();
-
-            this.delete(cachedRecord.getKey());
-        } else if (evictionStrategy == EvictionStrategy.LFU) {
-            Map.Entry<String, CacheableWrapper> cachedRecord = this.cachedDataStore.entrySet().stream().min((entry1, entry2) -> Math.toIntExact(entry1.getValue().accessCount - entry2.getValue().accessCount)).get();
-
-            this.delete(cachedRecord.getKey());
+            this.dataStoreMap.remove(this.evictionQueue.poll());
         } else if (evictionStrategy == EvictionStrategy.RANDOM) {
             int randomIndex = Cache.random.nextInt(evictionQueue.size());
+            String key = this.evictionQueue.get(randomIndex);
 
-            this.delete(this.evictionQueue.get(randomIndex));
+            this.evictionQueue.remove(key);
+            this.dataStoreMap.remove(key);
+        } else {
+            Collection<Bucket> buckets = this.dataStoreMap.getBuckets();
+            final Comparator<Bucket> bucketComparator = getBucketComparator(evictionStrategy);
+            Optional<Bucket> bucketHolder = buckets.stream().min(bucketComparator);
+
+            if (bucketHolder.isPresent()) {
+                DataStore dataStore = bucketHolder.get().getDataStore();
+
+                if (!dataStore.isEmpty()) {
+                    Comparator<Map.Entry<String, CacheableWrapper>> cachedDataComparator = getCachedDataComparator(evictionStrategy);
+                    Optional<Map.Entry<String, CacheableWrapper>> cachedRecordHolder = dataStore.entrySet().stream().min(cachedDataComparator);
+
+                    Map.Entry<String, CacheableWrapper> cachedRecordEntry = cachedRecordHolder.get();
+                    String key = cachedRecordEntry.getKey();
+
+                    this.evictionQueue.remove(key);
+                    this.dataStoreMap.remove(key);
+                }
+            } else {
+                throw new RuntimeException("unexpected scenario - this is not supposed to happen");
+            }
         }
     }
 
-    private synchronized void delete(String key) {
-        this.evictionQueue.remove(key);
-        this.cachedDataStore.remove(key);
+    private Comparator<Map.Entry<String, CacheableWrapper>> getCachedDataComparator(EvictionStrategy evictionStrategy) {
+        if (evictionStrategy == EvictionStrategy.LRU) {
+            return (entry1, entry2) -> Math.toIntExact(entry1.getValue().getLastAccessedTime() - entry2.getValue().getLastAccessedTime());
+        } else { // evictionStrategy == EvictionStrategy.LFU
+            return (entry1, entry2) -> Math.toIntExact(entry1.getValue().getAccessCount() - entry2.getValue().getAccessCount());
+        }
+    }
+
+    private Comparator<Bucket> getBucketComparator(EvictionStrategy evictionStrategy) {
+        if (evictionStrategy == EvictionStrategy.LRU) {
+            return (bucket1, bucket2) -> Math.toIntExact(bucket1.getLastAccessedTime() - bucket2.getLastAccessedTime());
+        } else { // evictionStrategy == EvictionStrategy.LFU
+            return (bucket1, bucket2) -> Math.toIntExact(bucket1.getAccessCount() - bucket2.getAccessCount());
+        }
     }
 
     private synchronized void invalidateCachedRecords() {
-        if (this.evictionQueue.isEmpty() || this.cachedDataStore.isEmpty()) {
+        if (this.evictionQueue.isEmpty() || this.dataStoreMap.isEmpty()) {
             return;
         }
 
         long currentTime = System.currentTimeMillis();
-        Iterator<String> iterator = this.cachedDataStore.keySet().iterator();
+        Collection<Bucket> buckets = this.dataStoreMap.getBuckets();
+        this.latch = new CountDownLatch(this.dataStoreMap.getBucketCount());
 
-        while (iterator.hasNext()) {
-            this.applyInvalidationStrategy(currentTime, iterator);
+        for (Bucket bucket : buckets) {
+            if (!bucket.isEmpty()) {
+                executor.execute(() -> {
+                    Iterator<String> iterator = bucket.getDataStore().keySet().iterator();
+
+                    while (iterator.hasNext()) {
+                        this.applyInvalidationStrategy(currentTime, iterator);
+                    }
+
+                    latch.countDown();
+                });
+            } else {
+                latch.countDown();
+            }
         }
 
-        System.out.println(this);
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException("unexpected error while waiting for completion");
+        }
     }
 
     private synchronized void applyInvalidationStrategy(long currentTime, Iterator<String> iterator) {
         String key = iterator.next();
-        CacheableWrapper record = this.cachedDataStore.get(key);
+        CacheableWrapper record = this.dataStoreMap.get(key);
         InvalidationStrategy invalidationStrategy = this.cachePolicy.getInvalidationStrategy();
 
         if (invalidationStrategy == InvalidationStrategy.TIME_TO_LIVE) {
-            if (currentTime - record.createdTime > this.cachePolicy.getInvalidationLifeTime()) {
+            if (currentTime - record.getCreatedTime() > this.cachePolicy.getInvalidationLifeTime()) {
                 this.delete(key, iterator);
             }
         } else if (invalidationStrategy == InvalidationStrategy.TIME_BASED) {
-            if (currentTime - record.lastAccessedTime > this.cachePolicy.getInvalidationLifeTime()) {
+            if (currentTime - record.getLastAccessedTime() > this.cachePolicy.getInvalidationLifeTime()) {
                 this.delete(key, iterator);
             }
         } else if (invalidationStrategy == InvalidationStrategy.REFRESH) {
-            if (currentTime - record.createdTime > cachePolicy.getInvalidationLifeTime()) {
-                this.delete(key);
+            if (currentTime - record.getCreatedTime() > cachePolicy.getInvalidationLifeTime()) {
+                this.evictionQueue.remove(key);
+                this.dataStoreMap.remove(key);
 
                 Cacheable data = this.dataSource.load(key);
 
@@ -259,8 +302,8 @@ public final class Cache {
 
                 CacheableWrapper freshRecord = new CacheableWrapper(key, data);
 
-                freshRecord.accessCount = record.accessCount + 1;
-                this.cachedDataStore.put(key, freshRecord);
+                freshRecord.setAccessCount(record.getAccessCount() + 1);
+                this.dataStoreMap.put(key, freshRecord);
                 this.evictionQueue.offer(key);
             }
         }
@@ -285,9 +328,16 @@ public final class Cache {
 
     private synchronized void shutdown() {
         this.active = false;
+
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            throw new RuntimeException("unexpected error while waiting for completion");
+        }
+
         this.invalidationTimer.cancel();
         this.writeBehindTimer.cancel();
-        this.cachedDataStore.clear();
+        this.dataStoreMap.clear();
         this.evictionQueue.clear();
         this.dataSyncQueue.clear();
     }
@@ -296,37 +346,8 @@ public final class Cache {
     public String toString() {
         return "{" +
                 "nm=" + this.name +
-                "ds=" + this.cachedDataStore.values() +
+                "ds=" + this.dataStoreMap.getBuckets() +
                 ", eq=" + this.evictionQueue +
                 '}';
-    }
-
-    private static class CacheableWrapper {
-        private final String key;
-        private final Cacheable data;
-        private final long createdTime;
-        private long lastAccessedTime;
-        private long accessCount;
-
-        public CacheableWrapper(String key, Cacheable data) {
-            this.data = data;
-            this.createdTime = System.currentTimeMillis();
-            this.lastAccessedTime = createdTime;
-            this.accessCount = 1;
-            this.key = key;
-        }
-
-        @Override
-        public String toString() {
-            return "{" +
-                    "ct=" + Util.time(this.createdTime) +
-                    ", lt=" + Util.time(this.lastAccessedTime) +
-                    ", ac=" + this.accessCount +
-                    ", k=" + this.key +
-                    '}';
-        }
-    }
-
-    private record DataSourceItem(CacheableWrapper cachedRecord, boolean isUpdate) {
     }
 }
