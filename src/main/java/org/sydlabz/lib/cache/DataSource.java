@@ -1,9 +1,5 @@
-package org.sydlabz.sd.core.cache;
+package org.sydlabz.lib.cache;
 
-/**
- * @author seyedsahil
- * @version 1.0
- */
 public interface DataSource {
     Cacheable load(String key);
 
