@@ -10,7 +10,7 @@ import java.time.format.DateTimeFormatter;
 
 public final class Util {
     static final long HASH_KEY_RANGE = Integer.MAX_VALUE + 1L;
-    static final int BUCKET_COUNT = 1024;
+    static final int BUCKET_COUNT = 128;
     private static final int ERROR_HASH = -1;
     private static final int FNV_OFFSET_BASIS_32 = 0x811c9dc5;
     private static final int FNV_PRIME_32 = 0x01000193;
