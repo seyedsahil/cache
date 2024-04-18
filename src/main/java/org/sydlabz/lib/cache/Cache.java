@@ -154,11 +154,13 @@ public final class Cache {
     private void shutdownInternal() {
         if (this.cacheConfiguration.isInvalidationEnabled()) {
             this.invalidationTask.await();
+            this.invalidationTask.cancel();
             this.invalidationTimer.cancel();
         }
 
         if (WriteStrategy.WRITE_BEHIND == this.cacheConfiguration.getWriteStrategy()) {
             this.dataSyncQueue.clear();
+            this.dataSyncTask.cancel();
             this.dataSyncTimer.cancel();
         }
 

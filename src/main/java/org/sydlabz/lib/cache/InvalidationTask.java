@@ -7,13 +7,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 final class InvalidationTask extends TimerTask {
-    private final BucketMap dataStore;
+    private final BucketMap bucketMap;
 
     private final ExecutorService executor;
     private CountDownLatch latch;
 
-    InvalidationTask(final BucketMap dataStore) {
-        this.dataStore = dataStore;
+    InvalidationTask(final BucketMap bucketMap) {
+        this.bucketMap = bucketMap;
         this.latch = null;
         this.executor = Executors.newCachedThreadPool();
     }
@@ -24,21 +24,21 @@ final class InvalidationTask extends TimerTask {
     }
 
     private void invalidate() {
-        if (this.dataStore.isEmpty()) {
+        if (this.bucketMap.isEmpty()) {
             return;
         }
 
         long currentTime = System.currentTimeMillis();
-        Collection<Bucket> buckets = dataStore.getBuckets();
+        Collection<Bucket> buckets = bucketMap.getBuckets();
 
-        this.latch = new CountDownLatch(this.dataStore.getBucketCount());
+        this.latch = new CountDownLatch(this.bucketMap.getBucketCount());
 
         for (Bucket bucket : buckets) {
             if (bucket.isEmpty()) {
                 this.latch.countDown();
             } else {
                 this.executor.execute(() -> {
-                    bucket.doInvalidate(currentTime);
+                    bucket.doInvalidate(currentTime, this.bucketMap);
                     this.latch.countDown();
                 });
             }
