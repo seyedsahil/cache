@@ -8,7 +8,7 @@ public final class Cache {
     private final String name;
     private final CacheConfiguration cacheConfiguration;
 
-        private final BucketMap bucketMap;
+    private final BucketMap bucketMap;
     private final DataSource dataSource;
     private transient Timer invalidationTimer;
     private transient InvalidationTask invalidationTask;
@@ -137,10 +137,14 @@ public final class Cache {
     }
 
     public void shutdown() {
-        this.shutdown(false);
+        this.shutdown(false, null);
     }
 
-    public void shutdown(final boolean force) {
+    public void shutdown(final ShutdownCallback shutdownCallback) {
+        this.shutdown(false, shutdownCallback);
+    }
+
+    public void shutdown(final boolean force, final ShutdownCallback shutdownCallback) {
         WriteStrategy writeStrategy = this.cacheConfiguration.getWriteStrategy();
 
         if (force || WriteStrategy.WRITE_THROUGH == writeStrategy) {
@@ -148,6 +152,10 @@ public final class Cache {
         } else if (writeStrategy == WriteStrategy.WRITE_BEHIND) {
             this.dataSyncTask.doDataSync();
             this.shutdownInternal();
+        }
+
+        if (Util.isUsable(shutdownCallback)) {
+            shutdownCallback.invoke();
         }
     }
 
@@ -174,10 +182,6 @@ public final class Cache {
 
     public long getSize() {
         return this.bucketMap.getCachedRecordsCount();
-    }
-
-    int getBucketCount() {
-        return this.bucketMap.getBucketCount();
     }
 
     @Override
