@@ -23,15 +23,18 @@ final class Bucket {
         return this.dataStore.isEmpty();
     }
 
-    public synchronized void doInvalidate(final long currentTime) {
+    public synchronized void doInvalidate(final long currentTime, BucketMap bucketMap) {
         Iterator<Map.Entry<String, Cached>> iterator = this.dataStore.entrySet().iterator();
+        int sizeBefore = this.dataStore.size();
 
         while (iterator.hasNext()) {
-            invalidate(currentTime, iterator);
+            invalidateRecord(currentTime, iterator);
         }
+
+        bucketMap.decrementCountBy(sizeBefore - this.dataStore.size());
     }
 
-    private void invalidate(final long currentTime, final Iterator<Map.Entry<String, Cached>> iterator) {
+    private void invalidateRecord(final long currentTime, final Iterator<Map.Entry<String, Cached>> iterator) {
         Map.Entry<String, Cached> cachedRecordEntry = iterator.next();
         Cached cachedRecord = cachedRecordEntry.getValue();
         InvalidationStrategy invalidationStrategy = this.cacheConfiguration.getInvalidationStrategy();
@@ -47,6 +50,9 @@ final class Bucket {
         } else if (InvalidationStrategy.REFRESH == invalidationStrategy) {
             if (currentTime - cachedRecord.getCreatedTime() > cacheConfiguration.getInvalidationLifeTime()) {
                 String recordKey = cachedRecordEntry.getKey();
+
+                iterator.remove();
+
                 Cacheable data = this.dataSource.load(recordKey);
 
                 if (!Util.isUsable(data) && !this.cacheConfiguration.isCacheNullValues()) {
@@ -57,7 +63,6 @@ final class Bucket {
 
                 freshRecord.setAccessCount(cachedRecord.getAccessCount() + 1);
                 this.dataStore.put(recordKey, freshRecord);
-                iterator.remove();
             }
         }
     }

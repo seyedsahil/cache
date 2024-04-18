@@ -1,5 +1,6 @@
 package org.sydlabz.lib.cache;
 
+import javax.management.timer.Timer;
 import java.util.Random;
 import java.util.Vector;
 import java.util.concurrent.CountDownLatch;
@@ -15,7 +16,11 @@ public class Main {
     }
 
     private static void test1() {
-        CacheConfiguration cacheConfiguration = new CacheConfiguration.Builder().isInvalidationEnabled(false).cacheSize(CACHE_SIZE).build();
+        CacheConfiguration cacheConfiguration = new CacheConfiguration.Builder()
+                .initialInvalidationDelay(Timer.ONE_SECOND * 4)
+                .invalidationLifeTime(200)
+                .invalidationFrequency(Timer.ONE_HOUR)
+                .cacheSize(CACHE_SIZE).build();
         TestDataSource dataSource = new TestDataSource();
         Cache cache = new Cache("test-cache", dataSource, cacheConfiguration);
         Vector<String> keyStore = new Vector<>();
@@ -26,6 +31,7 @@ public class Main {
         println("Key Size: " + KEY_SIZE);
 
         time = doPutOperations(cache, keyStore);
+        System.out.println("Cached Records Count after Put Finishes (Invalidation Executed In Between): " + cache.getSize());
 
         println("Total of Cache.put(key): " + time[2] + " nanoseconds / " + time[3] + " milliseconds");
         println("Average of Cache.put(key): " + time[0] + " nanoseconds / " + time[1] + " milliseconds");

@@ -86,7 +86,11 @@ final class BucketMap {
         return Collections.unmodifiableCollection(this.hashRing.values());
     }
 
-    public int getBucketCount() {
+    int getBucketCount() {
         return this.bucketCount;
+    }
+
+    synchronized void decrementCountBy(int delta) {
+        this.cachedRecordsCount.getAndAdd(-delta);
     }
 }
