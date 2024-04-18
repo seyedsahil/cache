@@ -19,154 +19,58 @@ public class Main {
         TestDataSource dataSource = new TestDataSource();
         Cache cache = new Cache("test-cache", dataSource, cacheConfiguration);
         Vector<String> keyStore = new Vector<>();
-        double[] averageTime;
-
-        Thread[] threads = new Thread[THREAD_COUNT];
-        AtomicLong accumulatedTime = new AtomicLong(0L);
+        double[] time;
 
         println("Thread Count: " + THREAD_COUNT);
         println("Cache Size: " + CACHE_SIZE);
         println("Key Size: " + KEY_SIZE);
 
-        averageTime = doPutOperations(cache, threads, keyStore, accumulatedTime);
+        time = doPutOperations(cache, keyStore);
 
-        println("Average of Cache.put(key): " + averageTime[0] + " nanoseconds / " + averageTime[1] + " milliseconds");
+        println("Total of Cache.put(key): " + time[2] + " nanoseconds / " + time[3] + " milliseconds");
+        println("Average of Cache.put(key): " + time[0] + " nanoseconds / " + time[1] + " milliseconds");
 
-        averageTime = doGetOperations(cache, threads, keyStore, accumulatedTime);
+        time = doGetOperations(cache, keyStore);
 
-        println("Average of Cache.get(key): " + averageTime[0] + " nanoseconds / " + averageTime[1] + " milliseconds");
+        println("Total of Cache.get(key): " + time[2] + " nanoseconds / " + time[3] + " milliseconds");
+        println("Average of Cache.get(key): " + time[0] + " nanoseconds / " + time[1] + " milliseconds");
 
-        averageTime = doRemoveOperations(cache, threads, keyStore, accumulatedTime);
+        time = doRemoveOperations(cache, keyStore);
 
-        println("Average of Cache.remove(key): " + averageTime[0] + " nanoseconds / " + averageTime[1] + " milliseconds");
+        println("Total of Cache.remove(key): " + time[2] + " nanoseconds / " + time[3] + " milliseconds");
+        println("Average of Cache.remove(key): " + time[0] + " nanoseconds / " + time[1] + " milliseconds");
 
         cache.shutdown();
     }
 
-    private static double[] doPutOperations(Cache cache, Thread[] threads, Vector<String> keyStore, AtomicLong accumulatedTime) {
-        accumulatedTime.set(0L);
+    private static double[] doPutOperations(Cache cache, Vector<String> keyStore) {
+        return executeTest(() -> {
+            String key = randomString(KEY_SIZE);
 
-        CountDownLatch latch = new CountDownLatch(THREAD_COUNT);
-        int limit = CACHE_SIZE / THREAD_COUNT;
+            keyStore.add(key);
 
-        for (int i = 0; i < THREAD_COUNT; i++) {
-            threads[i] = new Thread(() -> {
-                int j = 0;
-
-                while (j < limit) {
-                    String key = randomString(KEY_SIZE);
-
-                    keyStore.add(key);
-
-                    KeyValue keyValue = new KeyValue(key, new TestData(randomString(512)));
-                    long time = timeOf(() -> cache.put(keyValue.key(), keyValue.value()));
-
-                    accumulatedTime.getAndAdd(time);
-                    j++;
-                }
-
-                latch.countDown();
-            });
-
-            threads[i].start();
-        }
-
-        try {
-            latch.await();
-        } catch (InterruptedException ex) {
-            throw new RuntimeException(ex);
-        }
-
-        double[] average = new double[2];
-
-        average[0] = (accumulatedTime.get() + 0.0) / CACHE_SIZE;
-        average[1] = average[0] / 1000000;
-
-        accumulatedTime.set(0L);
-
-        return average;
+            return timeOf(() -> cache.put(key, new TestData(randomString(512))));
+        });
     }
 
-    private static double[] doGetOperations(Cache cache, Thread[] threads, Vector<String> keyStore, AtomicLong accumulatedTime) {
-        accumulatedTime.set(0L);
+    private static double[] doGetOperations(Cache cache, Vector<String> keyStore) {
+        Random random = new Random();
 
-        Random r = new Random();
-        CountDownLatch latch = new CountDownLatch(THREAD_COUNT);
-        int limit = CACHE_SIZE / THREAD_COUNT;
+        return executeTest(() -> {
+            String key = keyStore.get(random.nextInt(CACHE_SIZE));
 
-        for (int i = 0; i < THREAD_COUNT; i++) {
-            threads[i] = new Thread(() -> {
-                int j = 0;
-
-                while (j < limit) {
-                    String key = keyStore.get(r.nextInt(CACHE_SIZE));
-                    long time = timeOf(() -> cache.get(key));
-
-                    accumulatedTime.getAndAdd(time);
-                    j++;
-                }
-
-                latch.countDown();
-            });
-
-            threads[i].start();
-        }
-
-        try {
-            latch.await();
-        } catch (InterruptedException ex) {
-            throw new RuntimeException(ex);
-        }
-
-        double[] average = new double[2];
-
-        average[0] = (accumulatedTime.get() + 0.0) / CACHE_SIZE;
-        average[1] = average[0] / 1000000;
-
-        accumulatedTime.set(0L);
-
-        return average;
+            return timeOf(() -> cache.get(key));
+        });
     }
 
-    private static double[] doRemoveOperations(Cache cache, Thread[] threads, Vector<String> keyStore, AtomicLong accumulatedTime) {
-        accumulatedTime.set(0L);
+    private static double[] doRemoveOperations(Cache cache, Vector<String> keyStore) {
+        Random random = new Random();
 
-        Random r = new Random();
-        CountDownLatch latch = new CountDownLatch(THREAD_COUNT);
-        int limit = CACHE_SIZE / THREAD_COUNT;
+        return executeTest(() -> {
+            String key = keyStore.get(random.nextInt(CACHE_SIZE));
 
-        for (int i = 0; i < THREAD_COUNT; i++) {
-            threads[i] = new Thread(() -> {
-                int j = 0;
-
-                while (j < limit) {
-                    String key = keyStore.get(r.nextInt(CACHE_SIZE));
-                    long time = timeOf(() -> cache.remove(key));
-
-                    accumulatedTime.getAndAdd(time);
-                    j++;
-                }
-
-                latch.countDown();
-            });
-
-            threads[i].start();
-        }
-
-        try {
-            latch.await();
-        } catch (InterruptedException ex) {
-            throw new RuntimeException(ex);
-        }
-
-        double[] average = new double[2];
-
-        average[0] = (accumulatedTime.get() + 0.0) / CACHE_SIZE;
-        average[1] = average[0] / 1000000;
-
-        accumulatedTime.set(0L);
-
-        return average;
+            return timeOf(() -> cache.remove(key));
+        });
     }
 
     private static long timeOf(Timed action) {
@@ -193,5 +97,44 @@ public class Main {
         }
 
         return new String(randomString);
+    }
+
+    private static double[] executeTest(Scenario<Long> scenario) {
+        AtomicLong accumulatedTime = new AtomicLong(0L);
+        CountDownLatch latch = new CountDownLatch(THREAD_COUNT);
+        final int limit = CACHE_SIZE / THREAD_COUNT;
+        Thread[] threads = new Thread[THREAD_COUNT];
+
+        for (int i = 0; i < THREAD_COUNT; i++) {
+            threads[i] = new Thread(() -> {
+                int j = 0;
+
+                while (j < limit) {
+                    long time = scenario.execute();
+
+                    accumulatedTime.getAndAdd(time);
+                    j++;
+                }
+
+                latch.countDown();
+            });
+            threads[i].start();
+        }
+
+        try {
+            latch.await();
+        } catch (InterruptedException ex) {
+            throw new RuntimeException(ex);
+        }
+
+        double[] time = new double[4];
+        double doubleValue = accumulatedTime.get() + 0.0;
+
+        time[0] = doubleValue / CACHE_SIZE;
+        time[1] = time[0] / 1000000;
+        time[2] = doubleValue;
+        time[3] = doubleValue / 1000000 / THREAD_COUNT;
+
+        return time;
     }
 }

@@ -2,22 +2,17 @@ package org.sydlabz.lib.cache;
 
 import java.util.Iterator;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 final class Bucket {
-    private final int bucketKey;
     private final DataStore dataStore;
     private final transient CacheConfiguration cacheConfiguration;
     private final transient DataSource dataSource;
 
-    Bucket(final int bucketKey, final CacheConfiguration cacheConfiguration, final DataSource dataSource) {
-        this.bucketKey = bucketKey;
+    Bucket(final CacheConfiguration cacheConfiguration, final DataSource dataSource) {
         this.dataStore = new DataStore();
         this.cacheConfiguration = cacheConfiguration;
         this.dataSource = dataSource;
-    }
-
-    int getBucketKey() {
-        return this.bucketKey;
     }
 
     int size() {
@@ -28,7 +23,7 @@ final class Bucket {
         return this.dataStore.isEmpty();
     }
 
-    public void doInvalidate(final long currentTime) {
+    public synchronized void doInvalidate(final long currentTime) {
         Iterator<Map.Entry<String, Cached>> iterator = this.dataStore.entrySet().iterator();
 
         while (iterator.hasNext()) {
@@ -67,15 +62,21 @@ final class Bucket {
         }
     }
 
-    Cached get(String recordKey) {
+    Cached get(final String recordKey) {
         return this.dataStore.get(recordKey);
     }
 
-    void put(String recordKey, Cached cachedRecord) {
+    synchronized void put(final String recordKey, final Cached cachedRecord, final AtomicLong cachedRecordsCount) {
+        int sizeBefore = this.size();
+
         this.dataStore.put(recordKey, cachedRecord);
+        cachedRecordsCount.getAndAdd(this.size() - sizeBefore);
     }
 
-    void remove(String recordKey) {
+    synchronized void remove(final String recordKey, final AtomicLong cachedRecordsCount) {
+        int sizeBefore = this.size();
+
         this.dataStore.remove(recordKey);
+        cachedRecordsCount.getAndAdd(this.size() - sizeBefore);
     }
 }
