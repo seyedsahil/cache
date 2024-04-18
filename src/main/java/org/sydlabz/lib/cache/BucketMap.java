@@ -5,8 +5,6 @@ import java.util.Collections;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.IntStream;
 
 final class BucketMap {
@@ -16,7 +14,6 @@ final class BucketMap {
     private final transient DataSource dataSource;
 
     private AtomicLong cachedRecordsCount;
-    private final transient Lock writeLock;
 
     BucketMap(final int bucketCount, final CacheConfiguration cacheConfiguration, final DataSource dataSource) {
         this.validate(bucketCount);
@@ -26,7 +23,6 @@ final class BucketMap {
         this.cacheConfiguration = cacheConfiguration;
         this.dataSource = dataSource;
         this.cachedRecordsCount = new AtomicLong(0L);
-        this.writeLock = new ReentrantLock();
 
         this.createAndAttachBuckets();
     }
@@ -42,7 +38,7 @@ final class BucketMap {
 
         IntStream.range(0, this.bucketCount).forEach(index -> {
             int bucketKey = index * interval;
-            this.hashRing.put(bucketKey, new Bucket(bucketKey, cacheConfiguration, dataSource));
+            this.hashRing.put(bucketKey, new Bucket(cacheConfiguration, dataSource));
         });
     }
 
@@ -65,35 +61,14 @@ final class BucketMap {
     }
 
     void put(final String recordKey, final Cached cachedRecord) {
-        try {
-            writeLock.lock();
-
-            Bucket bucket = this.getBucket(recordKey);
-            int sizeBefore = bucket.size();
-
-            bucket.put(recordKey, cachedRecord);
-
-            this.cachedRecordsCount.getAndAdd(bucket.size() - sizeBefore);
-        } finally {
-            writeLock.unlock();
-        }
+        this.getBucket(recordKey).put(recordKey, cachedRecord, this.cachedRecordsCount);
     }
 
     void remove(final String recordKey) {
-        try {
-            writeLock.lock();
-
-            Bucket bucket = this.getBucket(recordKey);
-            int sizeBefore = bucket.size();
-
-            bucket.remove(recordKey);
-            this.cachedRecordsCount.getAndAdd(bucket.size() - sizeBefore);
-        } finally {
-            writeLock.unlock();
-        }
+        this.getBucket(recordKey).remove(recordKey, this.cachedRecordsCount);
     }
 
-    void clear() {
+    synchronized void clear() {
         this.cachedRecordsCount = new AtomicLong(0L);
         this.hashRing.clear();
         this.createAndAttachBuckets();

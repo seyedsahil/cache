@@ -23,7 +23,7 @@ public final class Util {
      * @param input is the key which needs to be hashed.
      * @return the hashed value which is a 32-bit integer.
      */
-    static int hash(String input) {
+    static int hash(final String input) {
         if (!Util.isUsable(input)) {
             return Util.ERROR_HASH;
         }
@@ -39,7 +39,7 @@ public final class Util {
         return hash;
     }
 
-    static boolean isUsable(Object object) {
+    static boolean isUsable(final Object object) {
         if (object == null) {
             return false;
         } else if (object instanceof String) {
@@ -49,7 +49,7 @@ public final class Util {
         return true;
     }
 
-    static String toJson(Object object) {
+    static String toJson(final Object object) {
         return Util.GSON.toJson(object);
     }
 
@@ -60,7 +60,7 @@ public final class Util {
         return localDateTime.format(Util.formatter);
     }
 
-    static void record(String method) {
+    static void record(final String method) {
         System.out.println(method + ": " + time(System.currentTimeMillis()));
     }
 }

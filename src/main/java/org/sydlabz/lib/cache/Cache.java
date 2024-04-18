@@ -8,7 +8,7 @@ public final class Cache {
     private final String name;
     private final CacheConfiguration cacheConfiguration;
 
-    private final BucketMap dataStore;
+        private final BucketMap bucketMap;
     private final DataSource dataSource;
     private transient Timer invalidationTimer;
     private transient InvalidationTask invalidationTask;
@@ -23,7 +23,7 @@ public final class Cache {
         this.name = name;
         this.cacheConfiguration = cacheConfiguration;
         this.dataSource = dataSource;
-        this.dataStore = new BucketMap(Util.BUCKET_COUNT, cacheConfiguration, dataSource);
+        this.bucketMap = new BucketMap(Util.BUCKET_COUNT, cacheConfiguration, dataSource);
 
         this.configureDataSync();
         this.configureInvalidation();
@@ -43,7 +43,7 @@ public final class Cache {
     private void configureInvalidation() {
         if (this.cacheConfiguration.isInvalidationEnabled()) {
             this.invalidationTimer = new Timer();
-            this.invalidationTask = new InvalidationTask(this.dataStore);
+            this.invalidationTask = new InvalidationTask(this.bucketMap);
             this.invalidationTimer.schedule(this.invalidationTask, this.cacheConfiguration.getInitialInvalidationDelay(), this.cacheConfiguration.getInvalidationFrequency());
         }
     }
@@ -52,7 +52,7 @@ public final class Cache {
         this.validateState();
         this.validateKey(key);
 
-        Cached cachedRecord = this.dataStore.get(key);
+        Cached cachedRecord = this.bucketMap.get(key);
 
         if (Util.isUsable(cachedRecord)) {
             return getFromCache(cachedRecord);
@@ -75,7 +75,7 @@ public final class Cache {
             return Optional.empty();
         }
 
-        this.dataStore.put(key, new Cached(key, data));
+        this.bucketMap.put(key, new Cached(key, data));
 
         return Optional.of(data);
     }
@@ -90,7 +90,7 @@ public final class Cache {
         }
 
         Cached freshRecord = new Cached(key, data);
-        Cached cachedRecord = this.dataStore.get(key);
+        Cached cachedRecord = this.bucketMap.get(key);
         boolean isUpdate = false;
 
         if (Util.isUsable(cachedRecord)) {
@@ -98,7 +98,7 @@ public final class Cache {
             freshRecord.setAccessCount(cachedRecord.getAccessCount() + 1);
         }
 
-        this.dataStore.put(key, freshRecord);
+        this.bucketMap.put(key, freshRecord);
 
         executeWriteStrategy(key, isUpdate, freshRecord);
     }
@@ -121,7 +121,7 @@ public final class Cache {
         this.validateState();
         this.validateKey(key);
 
-        this.dataStore.remove(key);
+        this.bucketMap.remove(key);
     }
 
     private void validateState() {
@@ -162,7 +162,7 @@ public final class Cache {
             this.dataSyncTimer.cancel();
         }
 
-        this.dataStore.clear();
+        this.bucketMap.clear();
         this.active = false;
     }
 
@@ -171,11 +171,11 @@ public final class Cache {
     }
 
     public long getSize() {
-        return this.dataStore.getCachedRecordsCount();
+        return this.bucketMap.getCachedRecordsCount();
     }
 
     int getBucketCount() {
-        return this.dataStore.getBucketCount();
+        return this.bucketMap.getBucketCount();
     }
 
     @Override
