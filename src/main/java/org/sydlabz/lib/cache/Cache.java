@@ -52,7 +52,7 @@ public final class Cache {
         this.validateState();
         this.validateKey(key);
 
-        Cached cachedRecord = this.bucketMap.get(key);
+        Cached cachedRecord = this.bucketMap.getAndUpdate(key);
 
         if (Util.isUsable(cachedRecord)) {
             return getFromCache(cachedRecord);
@@ -62,9 +62,6 @@ public final class Cache {
     }
 
     private Optional<Cacheable> getFromCache(final Cached cachedRecord) {
-        cachedRecord.incrementAccessCount();
-        cachedRecord.setLastAccessedTime();
-
         return Optional.of(cachedRecord.getCachedData());
     }
 
@@ -90,7 +87,7 @@ public final class Cache {
         }
 
         Cached freshRecord = new Cached(key, data);
-        Cached cachedRecord = this.bucketMap.get(key);
+        Cached cachedRecord = this.bucketMap.getOnly(key);
         boolean isUpdate = false;
 
         if (Util.isUsable(cachedRecord)) {

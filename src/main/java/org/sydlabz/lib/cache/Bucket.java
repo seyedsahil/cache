@@ -67,7 +67,18 @@ final class Bucket {
         }
     }
 
-    Cached get(final String recordKey) {
+    Cached getAndUpdate(final String recordKey) {
+        Cached cachedRecord = this.dataStore.get(recordKey);
+
+        if (Util.isUsable(cachedRecord)) {
+            cachedRecord.incrementAccessCount();
+            cachedRecord.setLastAccessedTime();
+        }
+
+        return cachedRecord;
+    }
+
+    public Cached getOnly(String recordKey) {
         return this.dataStore.get(recordKey);
     }
 

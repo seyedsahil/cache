@@ -56,8 +56,12 @@ final class BucketMap {
         return this.hashRing.get(nearestHashKey);
     }
 
-    Cached get(final String recordKey) {
-        return this.getBucket(recordKey).get(recordKey);
+    Cached getAndUpdate(final String recordKey) {
+        return this.getBucket(recordKey).getAndUpdate(recordKey);
+    }
+
+    public Cached getOnly(String recordKey) {
+        return this.getBucket(recordKey).getOnly(recordKey);
     }
 
     void put(final String recordKey, final Cached cachedRecord) {
