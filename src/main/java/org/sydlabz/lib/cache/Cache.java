@@ -8,7 +8,7 @@ public final class Cache {
     private final String name;
     private final CacheConfiguration cacheConfiguration;
 
-        private final BucketMap bucketMap;
+    private final BucketMap bucketMap;
     private final DataSource dataSource;
     private transient Timer invalidationTimer;
     private transient InvalidationTask invalidationTask;
@@ -52,7 +52,7 @@ public final class Cache {
         this.validateState();
         this.validateKey(key);
 
-        Cached cachedRecord = this.bucketMap.get(key);
+        Cached cachedRecord = this.bucketMap.getAndUpdate(key);
 
         if (Util.isUsable(cachedRecord)) {
             return getFromCache(cachedRecord);
@@ -62,9 +62,6 @@ public final class Cache {
     }
 
     private Optional<Cacheable> getFromCache(final Cached cachedRecord) {
-        cachedRecord.incrementAccessCount();
-        cachedRecord.setLastAccessedTime();
-
         return Optional.of(cachedRecord.getCachedData());
     }
 
@@ -73,6 +70,10 @@ public final class Cache {
 
         if (!Util.isUsable(data) && !this.cacheConfiguration.isCacheNullValues()) {
             return Optional.empty();
+        }
+
+        if (this.getSize() == this.cacheConfiguration.getCacheSize()) {
+            this.bucketMap.doEviction();
         }
 
         this.bucketMap.put(key, new Cached(key, data));
@@ -90,12 +91,16 @@ public final class Cache {
         }
 
         Cached freshRecord = new Cached(key, data);
-        Cached cachedRecord = this.bucketMap.get(key);
+        Cached cachedRecord = this.bucketMap.getOnly(key);
         boolean isUpdate = false;
 
         if (Util.isUsable(cachedRecord)) {
             isUpdate = true;
             freshRecord.setAccessCount(cachedRecord.getAccessCount() + 1);
+        }
+
+        if (!isUpdate && this.getSize() == this.cacheConfiguration.getCacheSize()) {
+            this.bucketMap.doEviction();
         }
 
         this.bucketMap.put(key, freshRecord);
@@ -137,10 +142,14 @@ public final class Cache {
     }
 
     public void shutdown() {
-        this.shutdown(false);
+        this.shutdown(false, null);
     }
 
-    public void shutdown(final boolean force) {
+    public void shutdown(final ShutdownCallback shutdownCallback) {
+        this.shutdown(false, shutdownCallback);
+    }
+
+    public void shutdown(final boolean force, final ShutdownCallback shutdownCallback) {
         WriteStrategy writeStrategy = this.cacheConfiguration.getWriteStrategy();
 
         if (force || WriteStrategy.WRITE_THROUGH == writeStrategy) {
@@ -148,6 +157,10 @@ public final class Cache {
         } else if (writeStrategy == WriteStrategy.WRITE_BEHIND) {
             this.dataSyncTask.doDataSync();
             this.shutdownInternal();
+        }
+
+        if (Util.isUsable(shutdownCallback)) {
+            shutdownCallback.invoke();
         }
     }
 
@@ -174,10 +187,6 @@ public final class Cache {
 
     public long getSize() {
         return this.bucketMap.getCachedRecordsCount();
-    }
-
-    int getBucketCount() {
-        return this.bucketMap.getBucketCount();
     }
 
     @Override

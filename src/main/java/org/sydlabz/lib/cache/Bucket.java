@@ -8,11 +8,13 @@ final class Bucket {
     private final DataStore dataStore;
     private final transient CacheConfiguration cacheConfiguration;
     private final transient DataSource dataSource;
+    private final EvictionQueue evictionQueue;
 
     Bucket(final CacheConfiguration cacheConfiguration, final DataSource dataSource) {
         this.dataStore = new DataStore();
         this.cacheConfiguration = cacheConfiguration;
         this.dataSource = dataSource;
+        this.evictionQueue = new EvictionQueue(cacheConfiguration.getEvictionStrategy());
     }
 
     int size() {
@@ -41,16 +43,19 @@ final class Bucket {
 
         if (InvalidationStrategy.TIME_TO_LIVE == invalidationStrategy) {
             if (currentTime - cachedRecord.getCreatedTime() > this.cacheConfiguration.getInvalidationLifeTime()) {
+                this.evictionQueue.remove(cachedRecord);
                 iterator.remove();
             }
         } else if (InvalidationStrategy.TIME_BASED == invalidationStrategy) {
             if (currentTime - cachedRecord.getLastAccessedTime() > this.cacheConfiguration.getInvalidationLifeTime()) {
+                this.evictionQueue.remove(cachedRecord);
                 iterator.remove();
             }
         } else if (InvalidationStrategy.REFRESH == invalidationStrategy) {
             if (currentTime - cachedRecord.getCreatedTime() > cacheConfiguration.getInvalidationLifeTime()) {
                 String recordKey = cachedRecordEntry.getKey();
 
+                this.evictionQueue.remove(cachedRecord);
                 iterator.remove();
 
                 Cacheable data = this.dataSource.load(recordKey);
@@ -62,12 +67,27 @@ final class Bucket {
                 Cached freshRecord = new Cached(recordKey, data);
 
                 freshRecord.setAccessCount(cachedRecord.getAccessCount() + 1);
+                this.evictionQueue.offer(freshRecord);
                 this.dataStore.put(recordKey, freshRecord);
             }
         }
     }
 
-    Cached get(final String recordKey) {
+    Cached getAndUpdate(final String recordKey) {
+        Cached cachedRecord = this.dataStore.get(recordKey);
+
+        if (Util.isUsable(cachedRecord)) {
+            cachedRecord.incrementAccessCount();
+            cachedRecord.setLastAccessedTime();
+
+            this.evictionQueue.remove(cachedRecord);
+            this.evictionQueue.offer(cachedRecord);
+        }
+
+        return cachedRecord;
+    }
+
+    public Cached getOnly(String recordKey) {
         return this.dataStore.get(recordKey);
     }
 
@@ -75,13 +95,28 @@ final class Bucket {
         int sizeBefore = this.size();
 
         this.dataStore.put(recordKey, cachedRecord);
+
+        this.evictionQueue.remove(cachedRecord);
+        this.evictionQueue.offer(cachedRecord);
+
         cachedRecordsCount.getAndAdd(this.size() - sizeBefore);
     }
 
     synchronized void remove(final String recordKey, final AtomicLong cachedRecordsCount) {
         int sizeBefore = this.size();
 
+        this.evictionQueue.remove(recordKey);
+
         this.dataStore.remove(recordKey);
         cachedRecordsCount.getAndAdd(this.size() - sizeBefore);
+    }
+
+    synchronized void evict(final AtomicLong cachedRecordsCount) {
+        Cached cachedRecord = this.evictionQueue.poll();
+
+        if (Util.isUsable(cachedRecord)) {
+            this.dataStore.remove(cachedRecord.getRecordKey());
+            cachedRecordsCount.getAndAdd(-1);
+        }
     }
 }
