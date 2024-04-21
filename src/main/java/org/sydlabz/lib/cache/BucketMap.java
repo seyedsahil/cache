@@ -97,4 +97,10 @@ final class BucketMap {
     synchronized void decrementCountBy(int delta) {
         this.cachedRecordsCount.getAndAdd(-delta);
     }
+
+    synchronized void doEviction() {
+        for (Bucket bucket : this.hashRing.values()) {
+            bucket.evict(this.cachedRecordsCount);
+        }
+    }
 }

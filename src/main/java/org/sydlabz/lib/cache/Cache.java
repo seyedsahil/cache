@@ -72,6 +72,10 @@ public final class Cache {
             return Optional.empty();
         }
 
+        if (this.getSize() == this.cacheConfiguration.getCacheSize()) {
+            this.bucketMap.doEviction();
+        }
+
         this.bucketMap.put(key, new Cached(key, data));
 
         return Optional.of(data);
@@ -93,6 +97,10 @@ public final class Cache {
         if (Util.isUsable(cachedRecord)) {
             isUpdate = true;
             freshRecord.setAccessCount(cachedRecord.getAccessCount() + 1);
+        }
+
+        if (!isUpdate && this.getSize() == this.cacheConfiguration.getCacheSize()) {
+            this.bucketMap.doEviction();
         }
 
         this.bucketMap.put(key, freshRecord);
